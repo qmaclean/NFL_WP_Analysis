@@ -1,0 +1,346 @@
+---
+title: "nfl_assignment"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+
+knitr::opts_chunk$set(echo = TRUE)
+
+#devtools::install_github(repo = "maksimhorowitz/nflscrapR")
+
+library(nflscrapR)
+library(dplyr)
+
+play = season_play_by_play(2019)
+#saveRDS(play,"play_2019.rds")
+
+#play<-readRDS("play_2019.rds")
+
+games2019 = season_games(Season = 2019)
+#saveRDS(games2019,"games_2019.rds")
+
+#games2019<-readRDS("games2019.rds")
+
+games2019<-games2019 %>% mutate(win = ifelse(games2019$homescore > games2019$awayscore,home,away))
+
+games2019<-subset(games2019,select=c("GameID","win"))
+
+playfl = full_join(games2019,play,by="GameID")
+#saveRDS(playfl,"play_final.rds")
+
+#playfl<-readRDS("play_final.rds")
+
+
+```
+
+```{r setup}
+
+
+
+playfl = playfl %>% mutate(possessionwin = ifelse(win == posteam,1,0))
+#playfl$ScoreDiff<-playfl$Pos - playfl$awayscore.x
+
+# remove no plays 
+playfl<-subset(playfl,playfl$PlayType != 'No Play')
+playfl<-subset(playfl,complete.cases(playfl$down))
+
+sub<-subset(playfl,playfl$GameID == '2019111100')
+sub<-subset(sub,select = c("GameID","Date","posteam","win","Drive","qtr","down","TimeSecs","yrdline100","ydstogo","Yards.Gained","PlayType","YardsAfterCatch","InterceptionThrown","Fumble","Sack","Penalty.Yards","ScoreDiff","possessionwin"))
+
+
+playfl<-subset(playfl,complete.cases(playfl$down))
+playfl<-subset(playfl,playfl$PlayType != 'Timeout')
+playfl<-subset(playfl,playfl$qtr != 5)
+
+###data ready ###
+#let's do some exploratory
+
+
+```
+
+
+
+```{r cars}
+
+library(ggplot2)
+ggplot(playfl,aes(x=TimeSecs,y=Yards.Gained)) +
+  geom_jitter(color="royal blue") +
+  geom_smooth(color="orange")
+
+
+#yards distribution
+ggplot(playfl,aes(Yards.Gained)) +
+  geom_histogram(aes(fill=..count..)) +
+  geom_density(col="orange") +
+  ggtitle("Distribution of Yards Gained")
+
+#PlayType
+ggplot(playfl,aes(PlayType)) +
+  geom_bar(aes()) +
+  ggtitle("Amt of Play Type")
+
+#AirYards
+a<-subset(playfl,playfl$AirYards > 0)
+ggplot(a,aes(AirYards)) +
+  geom_histogram(aes(fill=..count..)) +
+  geom_density(col="orange") +
+  ggtitle("Distribution of Positive Air Yards")
+
+ggplot(playfl,aes(ScoreDiff)) +
+  geom_histogram(aes(fill=..count..,bin=1)) +
+  geom_density(col="orange") +
+  ggtitle("Distribution of ScoreDiff")
+
+#less than 20 yards
+
+## poisson distribution 
+
+#Drive
+a<- playfl %>%
+  group_by(Drive) %>%
+  summarise(AvgYdsToGo = mean(ydstogo))
+
+a_mn<-mean(playfl$ydstogo)
+
+ggplot(a,aes(Drive,AvgYdsToGo)) +
+  geom_line(col="royal blue") +
+  geom_hline(yintercept = a_mn,col="orange") +
+  ggtitle("Drive Avg Yds to Go") 
+
+a <- playfl %>%
+  group_by(Drive) %>%
+  summarise(AvgYrdLine100 = mean(yrdline100))
+
+a_mn<-mean(playfl$yrdline100)
+
+ggplot(a,aes(Drive,AvgYrdLine100)) +
+  geom_line(col="royal blue") +
+  geom_hline(yintercept = a_mn,col="orange") +
+  ggtitle("Drive Avg Field Position") 
+
+a <- playfl %>%
+  group_by(qtr) %>%
+  summarise(AvgYrdLine100 = mean(yrdline100))
+
+a_mn<-mean(playfl$yrdline100)
+
+ggplot(a,aes(qtr,AvgYrdLine100)) +
+  geom_line(col="royal blue") +
+  geom_hline(yintercept = a_mn,col="orange") +
+  ggtitle("Drive Avg Field Position by Qtr")
+
+a<- playfl %>%
+  group_by(TimeSecs) %>%
+  summarise(AvgYrdLine100 = mean(yrdline100))
+
+a_mn<-mean(playfl$yrdline100)
+
+ggplot(a,aes(TimeSecs,AvgYrdLine100)) +
+  geom_line(col="royal blue") +
+  geom_hline(yintercept = a_mn,col="orange") +
+  ggtitle("Drive Avg Field Position by TimeSecs")
+
+
+##### Model #####
+play_final<-subset(playfl,select = c("GameID","Date","posteam","win","Drive","qtr","down","TimeSecs","yrdline100","ydstogo","Yards.Gained","PlayType","YardsAfterCatch","InterceptionThrown","Fumble","Sack","Penalty.Yards","ScoreDiff","possessionwin"))
+
+play_final$qtr<-as.factor(play_final$qtr)
+play_final$down<-as.factor(play_final$down)
+play_final$possessionwin<-as.factor(play_final$possessionwin)
+
+play_total<-nrow(play_final)
+
+play_final$u<-runif(n=play_total,min=0,max=1)
+
+#create train/test split;
+play.train<-subset(play_final,u < 0.70)
+play.test<-subset(play_final,u >= 0.70)
+
+train.poss<-play.train$possessionwin
+
+train.play.vars<-subset(play.train,
+  select=c("Drive","qtr","down","TimeSecs","yrdline100","ydstogo","Yards.Gained","PlayType","YardsAfterCatch","InterceptionThrown","Fumble","Sack","Penalty.Yards","ScoreDiff"))
+
+summary(play.null<-glm(possessionwin ~ 1,family = binomial,data = play.train))
+
+play.train.cols <- paste(paste(colnames(train.play.vars), collapse = " + "))
+
+#Define the upper model as the full model
+upper.lm<-glm(paste("possessionwin ~ ",play.train.cols),data=play.train,family = binomial)
+summary(upper.lm)
+
+# Define the lower model as the Intercept model
+lower.lm <- glm(possessionwin ~ 1, data = play.train, family = binomial)
+summary(lower.lm)
+
+library(caret)
+library(MASS)
+#Backward selection of variables
+backward.poss <- train(x = train.play.vars,
+                        y = train.poss,
+                        scope = list(upper = formula(upper.lm), lower = ~1),
+                        method = "glmStepAIC",
+                        family = binomial,
+                        direction = c('backward'))
+
+summary(backward.poss)
+
+anova(play.null,backward.poss,test="Chisq")
+
+#Forward selection of variables
+forward.poss <- train(x = train.play.vars,
+                       y = train.poss,
+                       method = "glmStepAIC",
+                       family = binomial,
+                       direction = c('forward'))
+
+summary(forward.poss)
+
+#AIC = 23671
+
+anova(play.null, forward.poss, test = "Chisq")
+
+# Stepwise selection of variables
+stepwise.poss <- train(x = train.play.vars,
+                       y = train.poss,
+                       method = "glmStepAIC",
+                       family = binomial,
+                       direction = c('both'))
+
+summary(stepwise.poss)
+
+#AIC 23671
+
+###choose stepwise.poss
+
+
+
+#anova(play.null, stepwise.poss, test = "Chisq")
+
+##### given this let's construct our own model ####
+model_fnl<-glm(play.train$possessionwin ~ down + TimeSecs + yrdline100 + ydstogo + InterceptionThrown + Fumble + ScoreDiff,data=play.train,family="binomial")
+
+summary(model_fnl)
+
+
+play.test$pred<-""
+play.test$predf<-""
+
+play.test$pred<-predict(model_fnl,newdata=play.test,type="response")
+play.test$pred<-ifelse(play.test$pred > 0.5,1,0)
+
+play.test$accurate <- play.test$possessionwin == play.test$pred
+play.test$accurate<-ifelse(play.test$accurate == TRUE,1,0)
+
+round(sum(play.test$accurate) / nrow(play.test) * 100, 1)
+
+### model is 76% accurate on the test set
+
+
+play.train$pred<-predict(model_fnl,newdata = play.train,type="response")
+play.train$pred<-ifelse(play.train$pred > 0.5,1,0)
+
+play.train$accurate<-play.train$possessionwin == play.train$pred
+
+play.train$accurate<-ifelse(play.train$accurate == TRUE,1,0)
+
+round(sum(play.train$accurate) / nrow(play.train) * 100, 1)
+
+
+#play.train$pred1<-predict(model_fnl,newdata = play.train,type="prob")
+#play.test$pred1<-predict(stepwise.poss,newdata=play.test,type="prob")
+
+play.train$predf<-predict(model_fnl,newdata = play.train,type="response")
+play.test$predf<-predict(model_fnl,newdata=play.test,type="response")
+
+#play.train$predf<-ifelse(play.train$posteam == play.train$home.x,play.train$pred1$`0`,1-play.train$pred1$`1`)
+#play.test$predf<-ifelse(play.test$posteam == play.test$home.x,play.test$pred1$`0`,1-play.test$pred1$`1`)
+
+
+###### basic model ######
+##### given this let's construct our own model ####
+#### worried that yards.gained, fumble, interception have too much effect on probability; let's validate. 
+model_fnl2<-glm(play.train$possessionwin ~ down + TimeSecs + ydstogo + yrdline100 + ScoreDiff,data=play.train,family="binomial")
+
+summary(model_fnl2)
+
+#### less accurate model; stay with first model due to a higher AIC ####
+
+
+
+play.test$pred1<-predict(model_fnl2,newdata=play.test,type="response")
+play.test$pred1<-ifelse(play.test$pred1 > 0.5,1,0)
+
+play.test$accurate1 <- play.test$possessionwin == play.test$pred1
+play.test$accurate1<-ifelse(play.test$accurate1 == TRUE,1,0)
+
+round(sum(play.test$accurate1) / nrow(play.test) * 100, 1)
+
+
+play.train$pred1<-predict(model_fnl2,newdata = play.train,type="response")
+play.train$pred1<-ifelse(play.train$pred1 > 0.5,1,0)
+
+play.train$accurate1<-play.train$possessionwin == play.train$pred1
+
+play.train$accurate1<-ifelse(play.train$accurate1 == TRUE,1,0)
+
+round(sum(play.train$accurate1) / nrow(play.train) * 100, 1)
+
+play.train$predf2<-predict(model_fnl2,newdata = play.train,type="response")
+play.test$predf2<-predict(model_fnl2,newdata=play.test,type="response")
+
+#### marginal difference
+
+```
+
+
+
+```{r mod, echo=FALSE}
+
+#GameID=2019111100
+
+
+b<-subset(play_final,play_final$GameID == "2019111100")
+
+#2019111007 Titans vs. KC
+b$pred<-predict(model_fnl,newdata = b,type="response")
+
+```
+
+
+```{r mod2}
+
+b$pred_else<-(1-b$pred)
+b$predf<-ifelse(b$possessionwin == 0,b$pred,b$pred_else)
+b$predf1<-ifelse(b$possessionwin == 1,b$pred,b$pred_else)
+
+ggplot(b) +
+  geom_line(aes(b$TimeSecs,y=b$predf,color="49ers")) +
+  geom_line(aes(b$TimeSecs,y=b$predf1,color="Seahawks")) +
+  ylim(c(0,1)) +
+  scale_x_reverse() +
+    ylab("Probability Win Percentage") +
+  xlab("Time Left (in Seconds)") +
+  geom_hline(yintercept = 0.5,col="black",linetype="dashed") +
+  geom_vline(xintercept = 2700,col="dark grey",linetype="dotted") +
+  geom_text(aes(x=2700,label="Qtr 2",y=0.95),color="dark grey",angle=90,text=element_text(size=7)) +
+  geom_vline(xintercept = 1800,col="dark grey",linetype="dotted") +
+   geom_text(aes(x=1800,label="Qtr 3",y=0.95),color="dark grey",angle=90,text=element_text(size=7)) +
+  geom_vline(xintercept = 900,col="dark grey",linetype="dotted") +
+  geom_text(aes(x=900,label="Qtr 4",y=0.95),color="dark grey",angle=90,text=element_text(size=7)) +
+  geom_vline(xintercept = 1126,col="green") +
+  geom_vline(xintercept = 2018,col="green") +
+  ggtitle("Week 10 Seahawks vs. 49ers (Niners First Loss of the season)")
+
+```
+
+
+
+
+
+
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
